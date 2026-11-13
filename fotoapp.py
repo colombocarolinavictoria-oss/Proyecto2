@@ -1,26 +1,52 @@
 # ----------------- FOTOAPP -----------------
 # Importamos librerias
-from PIL import Image, ImageOps, ImageFilter
+from io import BytesIO
 from pathlib import Path
-import numpy as np
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
 import cv2
 import matplotlib.pyplot as plt
+import numpy as np
+from PIL import Image, ImageFilter, ImageOps
+import os
+
 
 
 # ----------------- (1) -----------------
-# Ancho y alto en píxeles de cada app
+# Ancho y alto en píxeles recomendados para cada red social
 dimensiones = {
     "youtube": (1280, 720),
     "instagram": (1080, 1350),
     "twitter": (1600, 900),
     "facebook": (1200, 630)}
 
-# Función para abrir la imagen desde una ruta local
+
+def validar_imagen(imagen):
+    """Verifica que exista una imagen cargada y que sea un objeto Image de Pillow."""
+    if imagen is None:
+        raise ValueError("No hay una imagen cargada. Primero debe cargar una imagen en la opción 1.")
+    if not isinstance(imagen, Image.Image):
+        raise TypeError("La imagen debe ser una instancia de PIL.Image.Image.")
+
+
+# Función para abrir la imagen desde una ruta local o una URL
 def abrir_imagen(ruta):
-    """Abre una imagen desde una ruta local y la convierte al formato RGB."""
-    if not Path(ruta).exists():
-        raise FileNotFoundError("No se encontró la imagen.")
-    imagen = Image.open(ruta)
+    """Abre una imagen desde una ruta local (Drive/disco) o una URL y la convierte a RGB."""
+    ruta = str(ruta).strip()
+    if ruta.startswith(("http://", "https://")):
+        # Se envía User-Agent para evitar bloqueos de servidores y se lee en memoria con BytesIO
+        peticion = Request(ruta, headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urlopen(peticion, timeout=15) as respuesta:
+                datos = respuesta.read()
+            imagen = Image.open(BytesIO(datos))
+        except (HTTPError, URLError, OSError) as error:
+            raise FileNotFoundError(f"No se pudo descargar la imagen desde la URL: {error}") from error
+    else:
+        if not Path(ruta).exists():
+            raise FileNotFoundError("No se encontró la imagen en la ruta especificada.")
+        imagen = Image.open(ruta)
     return imagen.convert("RGB")
 
 # Función principal de redimensionamiento
@@ -65,10 +91,12 @@ def ajustar_contraste_histograma(imagen, guardar_en=None):
     """Mejora el contraste de una imagen mediante la ecualización del histograma
     del canal de luminosidad. Muestra y guarda una comparación entre la
     imagen original y la ecualizada."""
+    validar_imagen(imagen)
+
     # Convertimos la imagen Pillow en un array de NumPy
     imagen_array = np.array(imagen)
 
-    # Convertimos la imagen de RGB a YCrCb
+    # Convertimos a YCrCb para ecualizar solo la luminosidad (Y) sin alterar los colores (Cr, Cb)
     imagen_ycrcb = cv2.cvtColor(imagen_array, cv2.COLOR_RGB2YCrCb)
 
     # Separamos los canales de la imagen
@@ -110,6 +138,8 @@ def ajustar_contraste_histograma(imagen, guardar_en=None):
 def aplicar_filtro(imagen, nombre_filtro, guardar_en=None):
     """Aplica uno de los nueve filtros disponibles de Pillow y muestra
     una comparación entre la imagen original y la imagen filtrada."""
+    validar_imagen(imagen)
+
     # Diccionario con los filtros disponibles
     filtros = {
         "blur": ImageFilter.BLUR,
@@ -155,10 +185,12 @@ def aplicar_filtro(imagen, nombre_filtro, guardar_en=None):
 
 # ----------------- (4) -----------------
 # Función para detectar bordes y contornos
-def detectar_bordes(imagen, tecnica, guardar_en=None):
+def detectar_bordes(imagen, tecnica="canny", guardar_en=None):
     """Detecta bordes y contornos de una imagen utilizando la técnica
     Sobel o Canny. Muestra y guarda una comparación entre la imagen
     original y el resultado obtenido."""
+    validar_imagen(imagen)
+
     # Convertimos la imagen a un array de NumPy
     imagen_array = np.array(imagen)
 
@@ -206,12 +238,26 @@ def detectar_bordes(imagen, tecnica, guardar_en=None):
 
 # ----------------- (5) -----------------
 # Menú principal de la aplicación
+FILTROS_MENU = [
+    "Blur",
+    "Contour",
+    "Detail",
+    "Edge Enhance",
+    "Edge Enhance More",
+    "Emboss",
+    "Find Edges",
+    "Sharpen",
+    "Smooth"]
+
+
 def main(carpeta_resultados):
     """Ejecuta el menú principal de FOTOAPP y permite al usuario
     cargar imágenes, redimensionarlas, ajustar su contraste,
     aplicar filtros y detectar bordes."""
+    Path(carpeta_resultados).mkdir(parents=True, exist_ok=True)
     imagen_actual = None
     while True:
+        limpiar_pantalla()
         print("\n========== FOTOAPP ==========")
         print("1. Cargar y redimensionar imagen")
         print("2. Ajustar contraste")
@@ -222,7 +268,7 @@ def main(carpeta_resultados):
 
         # Opción 1: cargar imagen
         if opcion == "1":
-            ruta = input("Ingrese la ruta de la imagen: ")
+            ruta = input("Ingrese la ruta local o URL de la imagen: ")
             plataforma = input("Ingrese la plataforma (Youtube, Instagram, Twitter o Facebook): ")
             try:
                 nombre_archivo = f"redimensionada_{plataforma.lower().strip()}.png"
@@ -236,6 +282,7 @@ def main(carpeta_resultados):
         elif opcion in ["2", "3", "4"]:
             if imagen_actual is None:
                 print("Primero debe cargar una imagen utilizando la opción 1.")
+                input("\nPresione Enter para continuar...")
                 continue
             try:
                 # Opción 2: ajustar contraste
@@ -243,12 +290,16 @@ def main(carpeta_resultados):
                     ruta_guardado = Path(carpeta_resultados) / "contraste_menu.png"
                     ajustar_contraste_histograma(imagen_actual, ruta_guardado)
 
-                # Opción 3: aplicar filtro
+                # Opción 3: aplicar filtro (acepta número 1-9 o nombre del filtro)
                 elif opcion == "3":
-                    filtro = input(
-                        "Ingresá el filtro (Blur, Contour, Detail, "
-                        "Edge Enhance, Edge Enhance More, Emboss, "
-                        "Find Edges, Sharpen, Smooth): ")
+                    print("\nFiltros disponibles:")
+                    for idx, nombre_f in enumerate(FILTROS_MENU, start=1):
+                        print(f"  {idx}. {nombre_f}")
+                    seleccion = input("Seleccione el número o nombre del filtro: ").strip()
+                    if seleccion.isdigit() and 1 <= int(seleccion) <= len(FILTROS_MENU):
+                        filtro = FILTROS_MENU[int(seleccion) - 1]
+                    else:
+                        filtro = seleccion
                     nombre_archivo = filtro.lower().replace(" ", "_")
                     ruta_guardado = Path(carpeta_resultados) / f"filtro_{nombre_archivo}.png"
                     aplicar_filtro(imagen_actual, filtro, ruta_guardado)
@@ -267,10 +318,23 @@ def main(carpeta_resultados):
         elif opcion == "5":
             print("Gracias por utilizar FOTOAPP. ¡Hasta luego!")
             break
-        else:
-            print("Opción no válida. Intente nuevamente.")
+        """ else:
+            print("Opción no válida. Intente nuevamente.") """
+
+        input("\nPresione Enter para continuar...")    
 
 # Ejecutamos el menú si se inicia este archivo directamente
 if __name__ == "__main__":
     main("Resultados")
-    
+
+def limpiar_pantalla():
+    """Limpia la salida tanto en notebooks (Colab/Jupyter) como en terminal."""
+    try:
+        from IPython import get_ipython
+        if get_ipython() is not None:
+            from IPython.display import clear_output
+            clear_output(wait=True)
+            return
+    except ImportError:
+        pass
+    os.system("cls" if os.name == "nt" else "clear")
